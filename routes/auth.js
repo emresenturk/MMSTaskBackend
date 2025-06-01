@@ -1,13 +1,14 @@
 const express = require('express');
 const bcrypt = require('bcrypt-nodejs');
+const is = require('is_js');
 const jwt = require('jsonwebtoken');
 const Users = require('../db/models/Users');
-const Token = require('../db/models/Token'); // Token modelini dahil edin
+const Token = require('../db/models/Token'); 
+const Roles = require('../db/models/Roles');
+const UserRoles = require('../db/models/UserRoles');
+const RolePrivileges = require('../db/models/RolePrivileges');// Token modelini dahil edin
 const Response = require("../lib/Response");
 const CustomError = require('../lib/Error');
-
-const UserRoles = require('../db/models/UserRoles');
-const RolePrivileges = require('../db/models/RolePrivileges');
 const Enum = require('../config/Enum');
 const router = express.Router();
 
@@ -72,6 +73,7 @@ router.post('/login', async (req, res) => {
     res.status(errorResponse.code).json(errorResponse);
   }
 });
+
 // Me endpoint
 router.get('/me', authenticateToken, async (req, res) => {
   try {
@@ -81,6 +83,58 @@ router.get('/me', authenticateToken, async (req, res) => {
     }
 
     res.json(Response.successResponse({ user: { id: user._id, email: user.email, name: user.name }}));
+  } catch (err) {
+    const errorResponse = Response.errorResponse(err);
+    res.status(errorResponse.code).json(errorResponse);
+  }
+});
+
+router.post('/register', async (req, res) => {
+  const { email, password, first_name, last_name, phone_number } = req.body;
+
+  try {
+    if (!email || !password) {
+      throw new CustomError(Enum.HTTP_CODES.BAD_REQUEST, "Validation Error!", "Email and password must be filled");
+    }
+
+    if (is.not.email(email)) {
+      throw new CustomError(Enum.HTTP_CODES.BAD_REQUEST, "Validation Error!", "Email must be in a valid format");
+    }
+
+    if (password.length < Enum.PASS_LENGTH) {
+      throw new CustomError(Enum.HTTP_CODES.BAD_REQUEST, "Validation Error!", "Password length must be greater than " + Enum.PASS_LENGTH);
+    }
+
+    const existingUser = await Users.findOne({ email });
+    if (existingUser) {
+      throw new CustomError(Enum.HTTP_CODES.CONFLICT, "User Already Exists!", "A user with this email already exists");
+    }
+
+    const hashedPassword = bcrypt.hashSync(password, bcrypt.genSaltSync(8), null);
+
+    const user = await Users.create({
+      email,
+      password: hashedPassword,
+      is_active: true,
+      first_name,
+      last_name,
+      phone_number
+    });
+
+    // Find the default 'User' role
+    const defaultRole = await Roles.findOne({ role_name: 'User' });
+    if (!defaultRole) {
+      throw new CustomError(Enum.HTTP_CODES.INT_SERVER_ERROR, "Role Not Found!", "Default 'User' role not found");
+    }
+
+    // Assign the default role to the new user
+    await UserRoles.create({
+      role_id: defaultRole._id,
+      user_id: user._id
+    });
+
+    res.status(Enum.HTTP_CODES.CREATED).json(Response.successResponse({ success: true }, Enum.HTTP_CODES.CREATED));
+
   } catch (err) {
     const errorResponse = Response.errorResponse(err);
     res.status(errorResponse.code).json(errorResponse);
